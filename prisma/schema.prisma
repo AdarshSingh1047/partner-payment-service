@@ -12,3 +12,233 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+enum paymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model payment {
+  id String @id @default(uuid())
+
+  // Organization / Customer Info
+  organizationId String
+  orgName String
+  email   String
+
+  // Address (structured for query + analytics)
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  state        String
+  country      String
+  postalCode   String
+
+  // Payment Info (smallest unit: cents/paise)
+  amount   Int
+  currency String // ISO: USD, INR
+
+  // Provider Info (future-proof: stripe / paypall)
+  provider          String // "stripe"
+  providerPaymentId String?
+
+  // Stripe References
+  providerCustomerId String?
+  paymentIntentId    String? @unique
+  checkoutSessionId  String? @unique
+  invoiceId          String? @unique
+
+  // Invoice and Receipt
+  invoicePdfUrl    String?
+  invoiceHostedUrl String?
+  receiptUrl       String?
+
+  // Payment Status
+  status paymentStatus @default(PENDING)
+
+  // Extra data (raw webhook / metadata)
+  metadata Json?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Indexes
+  @@index([email])
+  @@index([status])
+  @@index([paymentIntentId])
+  @@index([providerCustomerId])
+  @@index([organizationId])
+  @@map("payments")
+}
+
+// ///////////////////////
+/// Business Models
+/// ///////////////////////
+model Business {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String          @db.VarChar(255)
+  email             String          @unique @db.VarChar(255)
+  password          String          @db.VarChar(255)
+  domain            String?         @db.VarChar(255)
+  role              BusinessRole    @default(BUSINESS_OWNER)
+  isActive          Boolean         @default(true)
+  emailVerified     Boolean         @default(false)
+  passwordChangedAt DateTime?       @db.Timestamptz(6)
+  isDeleted         Boolean         @default(false)
+  deletedAt         DateTime?       @db.Timestamptz(6)
+  createdAt         DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  agencies          Agency[]
+  apiKeys           BusinessApiKey?
+  usageRecords      BusinessUsageRecord[]
+
+  @@index([email], map: "idx_business_email")
+  @@index([isActive], map: "idx_business_is_active")
+  @@index([emailVerified], map: "idx_business_email_verified")
+  @@map("businesses")
+}
+
+model BusinessApiKey {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  keyHash    String    @unique @db.VarChar(64)
+  keyPrefix  String    @unique @db.VarChar(16)
+  businessId String    @unique @db.Uuid
+  usageCount Int       @default(0)
+  lastUsedAt DateTime? @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId], map: "idx_business_api_key_business_id")
+  @@index([keyHash], map: "idx_business_api_key_hash")
+  @@map("business_api_keys")
+}
+
+model Agency {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String         @db.VarChar(255)
+  email         String         @unique @db.VarChar(255)
+  password      String         @db.VarChar(255)
+  businessId    String         @db.Uuid
+  emailVerified Boolean        @default(true)
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
+  business      Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  apiKey        AgencyApiKey?
+  usageRecords  BusinessUsageRecord[]
+
+  @@index([email], map: "idx_agency_email")
+  @@index([businessId], map: "idx_agency_business_id")
+  @@index([isActive], map: "idx_agency_is_active")
+  @@map("agencies")
+}
+
+model AgencyApiKey {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  keyHash    String    @unique @db.VarChar(64)
+  keyPrefix  String    @unique @db.VarChar(16)
+  agencyId   String    @unique @db.Uuid
+  businessId String    @db.Uuid
+  usageCount Int       @default(0)
+  lastUsedAt DateTime? @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  agency     Agency    @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId], map: "idx_agency_api_key_agency_id")
+  @@index([businessId], map: "idx_agency_api_key_business_id")
+  @@index([keyHash], map: "idx_agency_api_key_hash")
+  @@map("agency_api_keys")
+}
+
+model BusinessUsageRecord {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId    String    @db.Uuid
+  agencyId      String?   @db.Uuid
+  apiKeyId      String?   @db.Uuid
+  endpoint      String?   @db.VarChar(255)
+  modelId       String?   @db.VarChar(255)
+  modelType     String?   @db.VarChar(50)
+  credits       Decimal   @default(0) @db.Decimal(10, 4)
+  requests      Int       @default(1)
+  success       Boolean   @default(true)
+  errorMessage  String?   @db.Text
+  duration      Int?      // milliseconds
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  business      Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agency        Agency?   @relation(fields: [agencyId], references: [id], onDelete: SetNull)
+
+  @@index([businessId], map: "idx_business_usage_business_id")
+  @@index([agencyId], map: "idx_business_usage_agency_id")
+  @@index([createdAt], map: "idx_business_usage_created_at")
+  @@index([modelId], map: "idx_business_usage_model_id")
+  @@index([businessId, createdAt], map: "idx_business_usage_business_created")
+  @@index([agencyId, createdAt], map: "idx_business_usage_agency_created")
+  @@map("business_usage_records")
+}
+
+enum BusinessRole {
+  BUSINESS_OWNER
+  BUSINESS_ADMIN
+}
+
+
+model CreditBalance {
+  id              String   @id @default(uuid())
+  organizationId  String   @unique
+  balance         Int      @default(0)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("credit_balances")
+}
+
+model CreditTransaction {
+  id              String   @id @default(uuid())
+  organizationId  String
+
+  amount          Int
+  type            CreditTransactionType
+  reason          String?
+
+  referenceId     String?   // payment / subscription / usage
+  balanceAfter    Int
+
+  metadata        Json?
+
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId])
+  @@map("credit_transactions")
+}
+
+enum CreditTransactionType {
+  CREDIT
+  DEBIT
+  REFUND
+}
+
+
+model CreditPricing {
+  id                String   @id @default(uuid())
+
+  currency          String   // "USD", "INR"
+  amount            Float    // e.g. 10 USD
+
+  credits           Int      // e.g. 10000 credits
+
+  creditsPerUnit    Float    // derived: 1 USD = 1000 credits
+
+  minPurchase       Float    // minimum recharge (e.g. 10 USD)
+
+  isActive          Boolean  @default(true)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("credit_pricing")
+}
